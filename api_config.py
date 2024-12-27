@@ -1,0 +1,8 @@
+CONFIG = {
+    "openai": [
+        "",
+    ],
+    "google": [
+      ""
+    ],
+}
