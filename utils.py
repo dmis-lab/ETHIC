@@ -1,6 +1,13 @@
 import re
+import json
+import os
+import time
+from openai import OpenAI
+import numpy as np
+from api_config import CONFIG
 
 def calculate_f1_score(model_answer, label_list):
+    
     model_list = re.split(r"[;,]\s*", model_answer)
     
     model_list = sorted(set([pred.lower().strip(".").strip() for pred in model_list]))
@@ -61,7 +68,182 @@ def calculate_lcs(prediction, answer):
     
     return lcs_sequence, lcs_score
 
-def calculate_score(task, prediction, answer):
+def create_batch_for_summarizing(path_list):
+
+    with open("./summeval_prompts/con_detailed.txt") as rf:
+        prompt_con = rf.read()
+    with open("./summeval_prompts/faith_detailed.txt") as rf:
+        prompt_faith = rf.read()
+    with open("./summeval_prompts/rel_detailed.txt") as rf:
+        prompt_rel = rf.read()
+    criteria_dict = {prompt_con: 'con', prompt_faith: 'faith', prompt_rel: 'rel'}
+    
+    batch_list = []
+    for path in path_list:
+        with open(path) as rf:
+            pred_dict = json.load(rf)
+        
+        # 1. prepare section-wise context / prediction
+        domain = os.path.basename(os.path.dirname(path))
+        filename = os.path.basename(path).replace(".json", "")
+
+        if domain == "Law":
+            section_pattern = re.compile("(<Segment \d+>)")
+        else:
+            section_pattern = re.compile("(<Section \d+>)")
+
+        section_context_dict = dict()
+        section_pred_dict = dict()
+        orig_sections = section_pattern.split(pred_dict["input_sections"])
+        summ_sections = section_pattern.split(pred_dict["prediction"])
+        
+        for i in range(1, len(orig_sections), 2):
+            section_context_dict[orig_sections[i]] = orig_sections[i+1].strip()
+        
+        for i in range(1, len(summ_sections), 2):
+            section_pred_dict[summ_sections[i]] = summ_sections[i+1].strip()
+
+        # 2. create batch using 3 different criteria per section
+        for prompt in [prompt_con, prompt_faith, prompt_rel]:
+            for section in section_context_dict:
+                if section not in section_pred_dict: # model did not create summary for the section
+                    continue
+                prompt_with_content = prompt.format(Document=section_context_dict[section], Summary=section_pred_dict[section])
+
+                batch = {
+                    'custom_id': f"{domain}_{filename}_{section}_{criteria_dict[prompt]}",
+                    'method': 'POST',
+                    'url': "/v1/chat/completions",
+                    'body': {
+                        'model': 'gpt-4o-2024-08-06',
+                        'messages': [{"role": "system", "content": prompt_with_content}],
+                        'temperature': 0,
+                        'max_tokens': 5,
+                        'top_p': 1,
+                        'frequency_penalty': 0,
+                        'presence_penalty': 0,
+                        'stop': None,
+                        'logprobs': True,
+                        'top_logprobs': 10,
+                        'n': 1
+                    }
+                }
+
+                batch_list.append(batch)
+        
+    return batch_list
+        
+def run_batch_for_summarizing(batch_input_path):
+    
+    batch_output_path = os.path.join(os.path.dirname(batch_input_path), "summarizing_output.jsonl")
+
+    client = OpenAI(api_key=CONFIG["openai"][0])
+    batch_input_file = client.files.create(
+    file=open(batch_input_path, "rb"),
+    purpose="batch"
+    )
+
+    batch_job = client.batches.create(
+        input_file_id=batch_input_file.id,
+        endpoint="/v1/chat/completions",
+        completion_window="24h"
+    )
+    time.sleep(10)
+
+    # retrieve batch information
+    retrieved_batch_job = client.batches.retrieve(batch_job.id)
+    
+    start = time.time()
+    while True:
+        time.sleep(30) # wait for 30 seconds for another status request
+        retrieved_batch_job = client.batches.retrieve(batch_job.id)
+        if retrieved_batch_job.status == 'completed' or retrieved_batch_job.status == 'failed':
+            break
+        
+    elapsed_time = time.time() - start
+    minutes, seconds = divmod(elapsed_time, 60)
+    print(f"Elapsed time: {int(minutes)} minutes and {seconds:.2f} seconds || batch {retrieved_batch_job.status}\n")
+    
+    if retrieved_batch_job.status == 'failed':
+        raise ValueError("batch run failed!")
+
+    result_file_id = retrieved_batch_job.output_file_id
+    result = client.files.content(result_file_id).text
+
+    time.sleep(10)
+
+    with open(batch_output_path, "w") as wf:
+        wf.write(result)
+
+    return batch_output_path
+
+def parse_score_for_summarizing(batch_output_path):
+    
+    batch_outputs = []
+    with open(batch_output_path) as rf:
+        for line in rf:
+            batch_outputs.append(json.loads(line))
+    
+    samples = dict()
+    for batch_output in batch_outputs:
+        custom_id = batch_output["custom_id"] # {domain}_{filename}_{section}_{criteria}
+        
+        domain = custom_id.split("_")[0]
+        section_format_text = "_<Segment" if domain == "LAW" else "_<Section"
+        filename = custom_id[custom_id.find("_")+1:custom_id.find(section_format_text)]
+        section = custom_id[custom_id.find(section_format_text) + 1:custom_id.rfind("_")]
+        criteria = custom_id[custom_id.rfind("_")+1:]
+
+        sample_id = f"{domain}_{filename}"
+        if sample_id not in samples:
+            samples[sample_id] = {'weighted_con': 0,  'weighted_rel': 0, 'weighted_faith': 0, 'top_con': 0, 'top_rel': 0, 'top_faith': 0, 'count': 0}
+        
+        # Extract scores from the response
+        top_logprobs = line['response']['body']['choices'][0]['logprobs']['content'][0]['top_logprobs']
+        token_value = line['response']['body']['choices'][0]['logprobs']['content'][0]['token']
+        
+        # Update top score
+        try:
+            samples[sample_id][f'top_{criteria}'] += float(token_value)
+        except ValueError:
+            samples[sample_id][f'top_{criteria}'] += 0
+        
+        # Calculate weighted scores
+        scores_dict = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+        for tokens in top_logprobs:
+            try:
+                score = int(tokens['token'])
+            except ValueError:
+                continue
+
+            if score < 1 or score > 5:
+                continue
+
+            logprob = tokens.get('logprob', float('-inf'))
+            prob = np.exp(logprob)
+            scores_dict[score] += prob
+
+        for score, prob in scores_dict.items():
+            samples[sample_id][f'weighted_{criteria}'] += score * prob
+
+        samples[sample_id]['count'] += 1
+
+    # Average scores   
+    for sample in samples:
+        samples[sample]['count'] /= 3
+        
+        for score in samples[sample]:
+            samples[sample][score] /= samples[sample]['count']
+            
+        samples[sample]['weighted'] = sum(samples[sample][feature] for feature in samples[sample] if 'weighted' in feature) / 3
+        samples[sample]['top'] = sum(samples[sample][feature] for feature in samples[sample] if 'top' in feature) / 3
+
+    return samples
+
+
+        
+
+def calculate_score(task, domain, user_msg, prediction, answer):
 
     result_dict = dict()
     result_dict["prediction"] = prediction
@@ -73,8 +255,10 @@ def calculate_score(task, prediction, answer):
     if task == "Recalling":
         result_dict["precision"], result_dict["recall"], result_dict["f1_score"] = calculate_f1_score(prediction, answer)
         score = result_dict["f1_score"]
-    elif task == "Summarizing": # will be calculated separately
-        score = 0
+    elif task == "Summarizing": 
+        input_sections_or_segments = re.search("### Context:\n(.+?)\n\nNow, respond to the instruction", user_msg, re.DOTALL).group(1)
+        result_dict["input_sections"] = input_sections_or_segments
+        score = 0 # score will be calculated separately
     elif task == "Organizing":
         pred_in_list = re.findall("\d+", prediction)
         answer_in_list = re.findall("\d+", answer)
