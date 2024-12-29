@@ -9,19 +9,7 @@
 
 ![](figs/long_context_figure.pdf)
 
-## ⏩ Quickstart
-To use our dataset directly, simply download it using 🤗 Datasets:
-
-```python
-from datasets import load_dataset
-
-task = "Recalling" # Choose from "Recalling", "Summarizing", "Organizing", "Attributing"
-dataset = load_dataset("dmis-lab/ETHIC", task)["test"]
-```
-
-To evaluate models using our benchmark, please follow the steps below.
-
-### Setup
+## ⚒️ Setup
 We recommend using the following versions to ensure compatibility.
 * PyTorch 2.4.0
 * Cuda 12.1
@@ -33,10 +21,20 @@ conda activate ethic
 # install required packages
 pip install -r requirements.txt
 ```
+## ⏩ Quickstart
+To use our dataset directly, simply download it using 🤗 Datasets:
 
-### Inference
-Make sure to prepare your OpenAI API key (or other keys for authorization) in _api_config.py_, since we utilize `gpt-4o` for evaluation in the _Summarizing_ task.
+```python
+from datasets import load_dataset
+
+task = "Recalling" # Choose from "Recalling", "Summarizing", "Organizing", "Attributing"
+dataset = load_dataset("dmis-lab/ETHIC", task)["test"]
+```
+
+For model inference and evaluation, prepare your OpenAI API key (or other keys for authorization) in _api_config.py_, as we utilize `gpt-4o` in the _Summarizing_ task.
 ```shell
+# run.sh
+
 CUDA_VISIBLE_DEVICES=1
 
 # arguments
