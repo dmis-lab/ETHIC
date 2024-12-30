@@ -7,7 +7,7 @@
 ## 📋 Introduction
 **ETHIC** is a long-context benchmark designed to assess whether LLMs can fully utilize the provided information. ETHIC comprises tasks with high **Information Coverage (IC)** scores (~91%), i.e. the proportion of input context necessary for answering queries.   
 
-![](figs/long_context_figure.pdf)
+![](figs/long_context_figure.JPG)
 
 ## ⚒️ Setup
 We recommend using the following versions to ensure compatibility.
