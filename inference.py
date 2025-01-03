@@ -1,24 +1,33 @@
 import os
 import json
 import re
+import sys
 from pathlib import Path
 from transformers import AutoTokenizer
 from datasets import load_dataset
 from tqdm import tqdm
 import argparse
-from collections import defaultdict
 from vllm import LLM, SamplingParams
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from openai import OpenAI
 
-from utils import get_model_prompts, calculate_score, create_batch_for_summarizing, run_batch_for_summarizing, parse_score_for_summarizing
+from utils import get_logger, get_model_prompts, calculate_score, create_batch_for_summarizing, run_batch_for_summarizing, parse_score_for_summarizing
 from api_config import CONFIG
 
 def main(args):
 
-    dataset = load_dataset("dmis-lab/ETHIC", args.task, cache_dir=args.cache_dir)["test"]
+    # set logger
     model_name = os.path.basename(args.model_name_or_path)
+
+    path_to_logdir = os.path.join(args.log_path, model_name, args.task)
+    os.makedirs(path_to_logdir, exist_ok=True)
+    logger = get_logger(logger_name=__name__, path_to_logdir=path_to_logdir)
+
+    dataset = load_dataset("dmis-lab/ETHIC", args.task, cache_dir=args.cache_dir)["test"]
+
+    logger.info(f"Loaded dataset for task {args.task}")
+
     save_path = os.path.join(args.save_path, model_name, args.task)
     os.makedirs(save_path, exist_ok=True)
 
@@ -29,6 +38,7 @@ def main(args):
 
     prompt = get_model_prompts(args.model_name_or_path)
 
+    # load model
     if "gpt" in args.model_name_or_path:
         client = OpenAI(api_key=CONFIG["openai"][0])
     elif "gemini" in args.model_name_or_path:
@@ -37,8 +47,10 @@ def main(args):
     else: # vllm
         model = LLM(model=args.model_name_or_path, download_dir=args.cache_dir)
         sampling_params = SamplingParams(temperature=0, top_p=1.0, max_tokens=4096)
+    
+    logger.info("Loaded model")
 
-    scores = 0
+    scores = []
     if args.task == "Organizing":
         score_per_domain = {
             "Books":[],
@@ -57,13 +69,20 @@ def main(args):
             "Law":[]
         }
 
-    for sample in tqdm(dataset):
+    logger.info(f"Saving model predictions to {save_path}")
+    
+    # dataset_tqdm = tqdm(dataset, file=open(os.devnull, "w"))
+    dataset_tqdm = tqdm(dataset.shuffle(seed=42).select(range(20)), file=open(os.devnull, "w"))
+    for sample in dataset_tqdm:
+        
         id_ = sample["ID"]
         answer = sample["Answer"]
         system_msg = sample["System_msg"]
         user_msg = sample["User_msg"]
         domain = sample["Domain"]
         
+        logger.info(f"{str(dataset_tqdm)} Domain: {domain}, ID: {id_}")
+
         if "gemini" in args.model_name_or_path:
             full_prompt = prompt.format(system_msg=system_msg, user_msg=user_msg)
             response = model.generate_content(
@@ -83,6 +102,7 @@ def main(args):
             try:
                 prediction = response.text
             except ValueError: # gemini models occasionally refuse to answer 
+                logger.warning("Prediction FAILED")
                 prediction = "FAILED"
         elif "gpt" in args.model_name_or_path:
             completion = client.chat.completions.create(
@@ -117,7 +137,7 @@ def main(args):
                 prediction = output.outputs[0].text
 
         result_dict, score = calculate_score(args.task, domain, user_msg, prediction, answer)
-        scores += score
+        scores.append(score)
         score_per_domain[domain].append(score)
 
         with open(os.path.join(save_path, domain, f"{id_}.json"), "w") as wf:
@@ -127,25 +147,35 @@ def main(args):
     
     if args.task == "Summarizing":
 
-        assert scores ==0, "Initial total score for Summarizing should be 0!"
+        assert scores == [], "Initial total score for Summarizing should be empty!"
 
-        path_list = [str(f) for f in Path(save_path).rglob("*.json")]
+        logger.info("Preparing for summary scoring (batch inference)")
+
+        path_list = [str(f) for f in Path(save_path).rglob("*.json") if f.parent.name in ["Books", "Debates", "Law", "Medicine"]]
         batch_for_summarizing = create_batch_for_summarizing(path_list)
 
         batch_input_path = os.path.join(os.path.dirname(save_path), "batch_inference", "summarizing_input.jsonl")
-        os.makedirs(os.path.dirname(batch_input_path), exist_ok=True)
-
         if os.path.exists(batch_input_path):
-            raise ValueError("batch file (input) already exists!")
+            logger.error(f"Batch file for {model_name} already exists!")
+            raise ValueError()
+        
+        os.makedirs(os.path.dirname(batch_input_path), exist_ok=True)
         
         with open(batch_input_path, "a") as wf:
             for line in batch_for_summarizing:
                 wf.write(json.dumps(line) + "\n")
 
-        batch_output_path = run_batch_for_summarizing(batch_input_path)
+        logger.info("Running batch inference")
+
+        try:
+            batch_output_path = run_batch_for_summarizing(batch_input_path)
+        except ValueError:
+            logger.error("Batch inference FAILED")
+            sys.exit(1)
+
+        logger.info("Batch inference COMPLETE")
+
         score_dict = parse_score_for_summarizing(batch_output_path)
-        
-        # update original file with score
         for domain_filename in score_dict:
             domain = domain_filename[:domain_filename.find("_")]
             filename = domain_filename[domain_filename.find("_")+1:]
@@ -165,10 +195,11 @@ def main(args):
                     "score": score
                 }, wf)
             
-            scores += score
-        
+            scores.append(score)
+            score_per_domain[domain].append(score)
+
     # write score file (overall / per domain)
-    avg_score = scores / len(dataset)
+    avg_score = sum(scores) / len(scores)
     avg_score_per_domain = {key: sum(value) / len(value) for key, value in score_per_domain.items()}
 
     with open(os.path.join(save_path, "final_score.txt"), "w") as wf:
@@ -176,12 +207,15 @@ def main(args):
     with open(os.path.join(save_path, "domain_score.json"), "w") as wf:
         json.dump(avg_score_per_domain, wf)
     
+    logger.info("All done!")
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--task", type=str, required=True, help="Choose from [\"Recalling\", \"Summarizing\", \"Organizing\", \"Attributing\"]")
     parser.add_argument("--model_name_or_path", type=str, required=True)
     parser.add_argument("--cache_dir", type=str, required=False)
     parser.add_argument("--save_path", type=str, default=os.path.join(os.path.abspath(os.path.dirname(__file__)), "results"))
+    parser.add_argument("--log_path", type=str, default=os.path.join(os.path.abspath(os.path.dirname(__file__)), "logs"))
     
     args = parser.parse_args()
     main(args)
