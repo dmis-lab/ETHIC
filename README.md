@@ -10,7 +10,7 @@
 ![](figs/long_context_figure.JPG)
 
 ## ⚒️ Setup
-We recommend using the following versions to ensure compatibility.
+We recommend using the following versions for compatibility.
 * PyTorch 2.4.0
 * Cuda 12.1
 ```shell
