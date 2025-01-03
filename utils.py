@@ -4,7 +4,34 @@ import os
 import time
 from openai import OpenAI
 import numpy as np
+import logging
+from datetime import datetime
 from api_config import CONFIG
+
+def get_logger(logger_name, path_to_logdir):
+    
+    logger = logging.getLogger(logger_name)
+    logger.setLevel(logging.INFO)
+
+    current_datetime = datetime.now()
+    formatted_datetime = current_datetime.strftime("%y%m%d-%H%M")
+    path_to_logfile = os.path.join(path_to_logdir, f"{formatted_datetime}.log")
+
+    if not logger.hasHandlers():
+        file_handler = logging.FileHandler(
+            path_to_logfile,
+            mode="a",
+            encoding="utf-8"
+        )
+        formatter = logging.Formatter(
+            "[%(asctime)s] %(levelname)s: %(message)s",
+            datefmt="%Y-%m-%d %H:%M",
+        )
+        
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+
+    return logger
 
 def calculate_f1_score(model_answer, label_list):
     
@@ -108,8 +135,7 @@ def create_batch_for_summarizing(path_list):
             for section in section_context_dict:
                 if section not in section_pred_dict: # model did not create summary for the section
                     continue
-                prompt_with_content = prompt.format(Document=section_context_dict[section], Summary=section_pred_dict[section])
-
+                prompt_with_content = prompt.replace('{{Document}}', section_context_dict[section]).replace('{{Summary}}', section_pred_dict[section])
                 batch = {
                     'custom_id': f"{domain}_{filename}_{section}_{criteria_dict[prompt]}",
                     'method': 'POST',
@@ -153,19 +179,14 @@ def run_batch_for_summarizing(batch_input_path):
     # retrieve batch information
     retrieved_batch_job = client.batches.retrieve(batch_job.id)
     
-    start = time.time()
     while True:
         time.sleep(30) # wait for 30 seconds for another status request
         retrieved_batch_job = client.batches.retrieve(batch_job.id)
         if retrieved_batch_job.status == 'completed' or retrieved_batch_job.status == 'failed':
             break
-        
-    elapsed_time = time.time() - start
-    minutes, seconds = divmod(elapsed_time, 60)
-    print(f"Elapsed time: {int(minutes)} minutes and {seconds:.2f} seconds || batch {retrieved_batch_job.status}\n")
     
     if retrieved_batch_job.status == 'failed':
-        raise ValueError("batch run failed!")
+        raise ValueError()
 
     result_file_id = retrieved_batch_job.output_file_id
     result = client.files.content(result_file_id).text
@@ -187,9 +208,8 @@ def parse_score_for_summarizing(batch_output_path):
     samples = dict()
     for batch_output in batch_outputs:
         custom_id = batch_output["custom_id"] # {domain}_{filename}_{section}_{criteria}
-        
         domain = custom_id.split("_")[0]
-        section_format_text = "_<Segment" if domain == "LAW" else "_<Section"
+        section_format_text = "_<Segment" if domain == "Law" else "_<Section"
         filename = custom_id[custom_id.find("_")+1:custom_id.find(section_format_text)]
         section = custom_id[custom_id.find(section_format_text) + 1:custom_id.rfind("_")]
         criteria = custom_id[custom_id.rfind("_")+1:]
@@ -199,8 +219,8 @@ def parse_score_for_summarizing(batch_output_path):
             samples[sample_id] = {'weighted_con': 0,  'weighted_rel': 0, 'weighted_faith': 0, 'top_con': 0, 'top_rel': 0, 'top_faith': 0, 'count': 0}
         
         # Extract scores from the response
-        top_logprobs = line['response']['body']['choices'][0]['logprobs']['content'][0]['top_logprobs']
-        token_value = line['response']['body']['choices'][0]['logprobs']['content'][0]['token']
+        top_logprobs = batch_output['response']['body']['choices'][0]['logprobs']['content'][0]['top_logprobs']
+        token_value = batch_output['response']['body']['choices'][0]['logprobs']['content'][0]['token']
         
         # Update top score
         try:
@@ -239,9 +259,6 @@ def parse_score_for_summarizing(batch_output_path):
         samples[sample]['top'] = sum(samples[sample][feature] for feature in samples[sample] if 'top' in feature) / 3
 
     return samples
-
-
-        
 
 def calculate_score(task, domain, user_msg, prediction, answer):
 
