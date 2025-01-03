@@ -71,8 +71,7 @@ def main(args):
 
     logger.info(f"Saving model predictions to {save_path}")
     
-    # dataset_tqdm = tqdm(dataset, file=open(os.devnull, "w"))
-    dataset_tqdm = tqdm(dataset.shuffle(seed=42).select(range(20)), file=open(os.devnull, "w"))
+    dataset_tqdm = tqdm(dataset, file=open(os.devnull, "w"))
     for sample in dataset_tqdm:
         
         id_ = sample["ID"]
