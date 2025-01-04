@@ -45,7 +45,7 @@ def main(args):
         genai.configure(api_key=CONFIG["google"][0])
         model = genai.GenerativeModel(args.model_name_or_path)
     else: # vllm
-        model = LLM(model=args.model_name_or_path, download_dir=args.cache_dir)
+        model = LLM(model=args.model_name_or_path, download_dir=args.cache_dir, trust_remote_code=True)
         sampling_params = SamplingParams(temperature=0, top_p=1.0, max_tokens=4096)
     
     logger.info("Loaded model")

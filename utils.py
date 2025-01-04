@@ -289,13 +289,10 @@ def calculate_score(task, domain, user_msg, prediction, answer):
             target_span = prediction
         
         pred_numbers = ", ".join(set(re.findall("\d+", target_span)))
-        answer_numbers = [re.search("\d+", ans).group() for ans in answer]
+        answer_numbers = [re.search("\d+", ans).group() if re.search("\d+", ans) else "None" for ans in answer]
 
-        ## account for answer=[]
         if pred_numbers == []:
             pred_numbers = "None"
-        if answer_numbers == []:
-            answer_numbers = ["None"]
         
         result_dict["precision"], result_dict["recall"], result_dict["f1_score"] = calculate_f1_score(pred_numbers, answer_numbers)
         score = result_dict["f1_score"]
