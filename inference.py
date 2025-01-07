@@ -11,8 +11,9 @@ from vllm import LLM, SamplingParams
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 from openai import OpenAI
+import tiktoken
 
-from utils import get_logger, get_model_prompts, calculate_score, create_batch_for_summarizing, run_batch_for_summarizing, parse_score_for_summarizing
+from utils import get_logger, get_model_prompts, calculate_score, create_batch_for_summarizing, run_batch_for_summarizing, parse_score_for_summarizing, write_score_file, count_tokens_for_gpt
 from api_config import CONFIG
 
 def main(args):
@@ -24,6 +25,8 @@ def main(args):
     os.makedirs(path_to_logdir, exist_ok=True)
     logger = get_logger(logger_name=__name__, path_to_logdir=path_to_logdir)
 
+    logger.info(f"Running command: {args.command}")
+
     dataset = load_dataset("dmis-lab/ETHIC", args.task, cache_dir=args.cache_dir)["test"]
 
     logger.info(f"Loaded dataset for task {args.task}")
@@ -31,10 +34,13 @@ def main(args):
     save_path = os.path.join(args.save_path, model_name, args.task)
     os.makedirs(save_path, exist_ok=True)
 
-    os.makedirs(os.path.join(save_path, "Books"), exist_ok=True)
-    os.makedirs(os.path.join(save_path, "Debates"), exist_ok=True)
-    os.makedirs(os.path.join(save_path, "Medicine"), exist_ok=True)
-    os.makedirs(os.path.join(save_path, "Law"), exist_ok=True)
+    if args.domain:
+        os.makedirs(os.path.join(save_path, args.domain), exist_ok=True)
+    else:
+        os.makedirs(os.path.join(save_path, "Books"), exist_ok=True)
+        os.makedirs(os.path.join(save_path, "Debates"), exist_ok=True)
+        os.makedirs(os.path.join(save_path, "Medicine"), exist_ok=True)
+        os.makedirs(os.path.join(save_path, "Law"), exist_ok=True)
 
     prompt = get_model_prompts(args.model_name_or_path)
 
@@ -44,33 +50,25 @@ def main(args):
     elif "gemini" in args.model_name_or_path:
         genai.configure(api_key=CONFIG["google"][0])
         model = genai.GenerativeModel(args.model_name_or_path)
+    elif args.use_yarn:
+
+        logger.info(f"Loading model with yarn.")
+
+        model = LLM(model=args.model_name_or_path, download_dir=args.cache_dir, rope_scaling={"factor":4.0, "original_max_position_embeddings": 32768, "type": "yarn"}, trust_remote_code=True)
+        sampling_params = SamplingParams(temperature=0, top_p=1.0, max_tokens=4096)
     else: # vllm
         model = LLM(model=args.model_name_or_path, download_dir=args.cache_dir, trust_remote_code=True)
         sampling_params = SamplingParams(temperature=0, top_p=1.0, max_tokens=4096)
     
-    logger.info("Loaded model")
+    logger.info(f"Loaded model, saving model predictions to {save_path}")
 
-    scores = []
-    if args.task == "Organizing":
-        score_per_domain = {
-            "Books":[],
-            "Debates":[],
-        }
-    elif args.task == "Attributing":
-        score_per_domain = {
-            "Medicine":[],
-            "Law":[]
-        }
-    else:
-        score_per_domain = {
-            "Books":[],
-            "Debates":[],
-            "Medicine":[],
-            "Law":[]
-        }
+    if args.under_32k_only:
+        logger.info(f"Predictions for samples less than 32768 tokens only")
+    if args.over_32k_only:
+        logger.info(f"Predictions for samples more than 32768 tokens only")
+    if args.domain:
+        logger.info(f"Predictions for domain {args.domain} only")
 
-    logger.info(f"Saving model predictions to {save_path}")
-    
     dataset_tqdm = tqdm(dataset, file=open(os.devnull, "w"))
     for sample in dataset_tqdm:
         
@@ -80,10 +78,21 @@ def main(args):
         user_msg = sample["User_msg"]
         domain = sample["Domain"]
         
+        if args.domain and args.domain != domain:
+            logger.info(f"skipping domain {domain}")
+            continue
+
         logger.info(f"{str(dataset_tqdm)} Domain: {domain}, ID: {id_}")
 
         if "gemini" in args.model_name_or_path:
             full_prompt = prompt.format(system_msg=system_msg, user_msg=user_msg)
+            full_prompt_length = model.count_tokens(full_prompt).total_tokens
+            if args.under_32k_only and full_prompt_length > 32768:
+                logger.info(f"skipping: {full_prompt_length} > 32768")
+                continue
+            if args.over_32k_only and full_prompt_length <= 32768:
+                logger.info(f"skipping: {full_prompt_length} <= 32768")
+                continue
             response = model.generate_content(
                 full_prompt,
                 generation_config=genai.types.GenerationConfig(
@@ -104,19 +113,27 @@ def main(args):
                 logger.warning("Prediction FAILED")
                 prediction = "FAILED"
         elif "gpt" in args.model_name_or_path:
-            completion = client.chat.completions.create(
-                model=args.model_name_or_path,
-                messages=[
+            messages = [
                     {"role" : "system", "content": system_msg},
                     {"role":"user", "content":user_msg}
-                ],
+                ]
+            full_prompt_length = count_tokens_for_gpt(messages, args.model_name_or_path)
+            if args.under_32k_only and full_prompt_length > 32768:
+                logger.info(f"skipping: {full_prompt_length} > 32768")
+                continue
+            if args.over_32k_only and full_prompt_length <= 32768:
+                logger.info(f"skipping: {full_prompt_length} <= 32768")
+                continue
+            completion = client.chat.completions.create(
+                model=args.model_name_or_path,
+                messages=messages,
                 temperature=0,
                 top_p=1.0,
                 max_tokens=4096,
             )
             prediction = completion.choices[0].message
         elif "Qwen" in args.model_name_or_path or "glm" in args.model_name_or_path:
-            tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
+            tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, trust_remote_code=True)
             messages=[
                 {"role" : "system", "content": system_msg},
                 {"role":"user", "content":user_msg}
@@ -126,6 +143,14 @@ def main(args):
                 tokenize=False,
                 add_generation_prompt=True
             )
+            
+            full_prompt_length = len(tokenizer.encode(full_prompt))
+            if args.under_32k_only and full_prompt_length > 32768:
+                logger.info(f"skipping: {full_prompt_length} > 32768")
+                continue
+            if args.over_32k_only and full_prompt_length <= 32768:
+                logger.info(f"skipping: {full_prompt_length} <= 32768")
+                continue
             outputs = model.generate([full_prompt], sampling_params)
             for output in outputs:
                 prediction = output.outputs[0].text
@@ -135,18 +160,13 @@ def main(args):
             for output in outputs:
                 prediction = output.outputs[0].text
 
-        result_dict, score = calculate_score(args.task, domain, user_msg, prediction, answer)
-        scores.append(score)
-        score_per_domain[domain].append(score)
+        result_dict, score = calculate_score(args.task, user_msg, prediction, answer)
 
         with open(os.path.join(save_path, domain, f"{id_}.json"), "w") as wf:
             json.dump(result_dict, wf)
 
-    # for Summarizing task, score using batch inference
-    
+    # for Summarizing task, score using batch inference 
     if args.task == "Summarizing":
-
-        assert scores == [], "Initial total score for Summarizing should be empty!"
 
         logger.info("Preparing for summary scoring (batch inference)")
 
@@ -193,18 +213,10 @@ def main(args):
                     "input_sections": input_sections,
                     "score": score
                 }, wf)
-            
-            scores.append(score)
-            score_per_domain[domain].append(score)
 
-    # write score file (overall / per domain)
-    avg_score = sum(scores) / len(scores)
-    avg_score_per_domain = {key: sum(value) / len(value) for key, value in score_per_domain.items()}
-
-    with open(os.path.join(save_path, "final_score.txt"), "w") as wf:
-        wf.write(str(avg_score))
-    with open(os.path.join(save_path, "domain_score.json"), "w") as wf:
-        json.dump(avg_score_per_domain, wf)
+    # write score files ONLY WHEN the entire test set is completed 
+    if not args.under_32k_only and not args.over_32k_only and not args.domain:
+        write_score_file(args.task, save_path)
     
     logger.info("All done!")
 
@@ -213,8 +225,13 @@ if __name__ == "__main__":
     parser.add_argument("--task", type=str, required=True, help="Choose from [\"Recalling\", \"Summarizing\", \"Organizing\", \"Attributing\"]")
     parser.add_argument("--model_name_or_path", type=str, required=True)
     parser.add_argument("--cache_dir", type=str, required=False)
+    parser.add_argument("--domain", type=str, required=False)
+    parser.add_argument("--use_yarn", action="store_true")
+    parser.add_argument("--under_32k_only", action="store_true")
+    parser.add_argument("--over_32k_only", action="store_true")
     parser.add_argument("--save_path", type=str, default=os.path.join(os.path.abspath(os.path.dirname(__file__)), "results"))
     parser.add_argument("--log_path", type=str, default=os.path.join(os.path.abspath(os.path.dirname(__file__)), "logs"))
+    parser.add_argument("--command", type=str, help="The command that was run")
     
     args = parser.parse_args()
     main(args)
