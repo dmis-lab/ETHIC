@@ -26,6 +26,8 @@ def main(args):
     logger = get_logger(logger_name=__name__, path_to_logdir=path_to_logdir)
 
     logger.info(f"Running command: {args.command}")
+    used_gpus = next((part.split("=")[1] for part in args.command.split() if part.startswith("CUDA_VISIBLE_DEVICES=")), "")
+    gpu_count = len(used_gpus.split(",")) if used_gpus else 0
 
     dataset = load_dataset("dmis-lab/ETHIC", args.task, cache_dir=args.cache_dir)["test"]
 
@@ -57,7 +59,7 @@ def main(args):
         model = LLM(model=args.model_name_or_path, download_dir=args.cache_dir, rope_scaling={"factor":4.0, "original_max_position_embeddings": 32768, "type": "yarn"}, trust_remote_code=True)
         sampling_params = SamplingParams(temperature=0, top_p=1.0, max_tokens=4096)
     else: # vllm
-        model = LLM(model=args.model_name_or_path, download_dir=args.cache_dir, trust_remote_code=True)
+        model = LLM(model=args.model_name_or_path, download_dir=args.cache_dir, trust_remote_code=True, tensor_parallel_size=gpu_count)
         sampling_params = SamplingParams(temperature=0, top_p=1.0, max_tokens=4096)
     
     logger.info(f"Loaded model, saving model predictions to {save_path}")

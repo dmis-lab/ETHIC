@@ -1,7 +1,9 @@
-CUDA_VISIBLE_DEVICES=1
+CUDA_VISIBLE_DEVICES=0,1,2,3
+export VLLM_WORKER_MULTIPROC_METHOD=spawn
 
-task=Recalling
-model_name_or_path=meta-llama/Meta-Llama-3.1-8B-Instruct
+task=Attributing
+model_name_or_path=meta-llama/Meta-Llama-3.1-70B-Instruct
+# model_name_or_path=meta-llama/Meta-Llama-3.1-8B-Instruct
 # model_name_or_path=gemini-1.5-pro
 # model_name_or_path=THUDM/glm-4-9b-chat
 # model_name_or_path=microsoft/Phi-3.5-mini-instruct
