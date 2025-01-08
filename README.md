@@ -36,16 +36,32 @@ For model inference and evaluation, prepare your OpenAI API key (or other keys f
 # run.sh
 
 CUDA_VISIBLE_DEVICES=1
+export VLLM_WORKER_MULTIPROC_METHOD=spawn
 
-# arguments
 task=Attributing # Recalling, Summarizing, Organizing, Attributing
 model_name_or_path=meta-llama/Meta-Llama-3.1-8B-Instruct
-cache_dir=""
+
+# use_yarn=True
+# under_32k_only=True
+# over_32k_only=True
+# domain=Medicine
 
 cmd="CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES python inference.py \
     --task $task \
     --model_name_or_path $model_name_or_path"
 
+if [ "$use_yarn" = "True" ]; then
+    cmd="$cmd --use_yarn"
+fi
+if [ "$under_32k_only" = "True" ]; then
+    cmd="$cmd --under_32k_only"
+fi
+if [ "$over_32k_only" = "True" ]; then
+    cmd="$cmd --over_32k_only"
+fi
+if [ -n "$domain" ]; then
+    cmd="$cmd --domain $domain"
+fi
 if [ -n "$cache_dir" ]; then
     cmd="$cmd --cache_dir $cache_dir"
 fi
