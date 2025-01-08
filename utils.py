@@ -1,12 +1,14 @@
 import re
 import json
 import os
+import glob
 import time
 from openai import OpenAI
 import numpy as np
 import logging
 from datetime import datetime
 from api_config import CONFIG
+import tiktoken
 
 def get_logger(logger_name, path_to_logdir):
     
@@ -32,6 +34,51 @@ def get_logger(logger_name, path_to_logdir):
         logger.addHandler(file_handler)
 
     return logger
+
+def count_tokens_for_gpt(messages, model):
+
+    """Return the number of tokens used by a list of messages."""
+    try:
+        encoding = tiktoken.encoding_for_model(model)
+    except KeyError:
+        print("Warning: model not found. Using o200k_base encoding.")
+        encoding = tiktoken.get_encoding("o200k_base")
+    if model in {
+        "gpt-3.5-turbo-0125",
+        "gpt-4-0314",
+        "gpt-4-32k-0314",
+        "gpt-4-0613",
+        "gpt-4-32k-0613",
+        "gpt-4o-mini-2024-07-18",
+        "gpt-4o-2024-08-06"
+        }:
+        tokens_per_message = 3
+        tokens_per_name = 1
+    elif "gpt-3.5-turbo" in model:
+        print("Warning: gpt-3.5-turbo may update over time. Returning num tokens assuming gpt-3.5-turbo-0125.")
+        return count_tokens_for_gpt(messages, model="gpt-3.5-turbo-0125")
+    elif "gpt-4o-mini" in model:
+        print("Warning: gpt-4o-mini may update over time. Returning num tokens assuming gpt-4o-mini-2024-07-18.")
+        return count_tokens_for_gpt(messages, model="gpt-4o-mini-2024-07-18")
+    elif "gpt-4o" in model:
+        print("Warning: gpt-4o and gpt-4o-mini may update over time. Returning num tokens assuming gpt-4o-2024-08-06.")
+        return count_tokens_for_gpt(messages, model="gpt-4o-2024-08-06")
+    elif "gpt-4" in model:
+        print("Warning: gpt-4 may update over time. Returning num tokens assuming gpt-4-0613.")
+        return count_tokens_for_gpt(messages, model="gpt-4-0613")
+    else:
+        raise NotImplementedError(
+            f"""count_tokens_for_gpt() is not implemented for model {model}."""
+        )
+    num_tokens = 0
+    for message in messages:
+        num_tokens += tokens_per_message
+        for key, value in message.items():
+            num_tokens += len(encoding.encode(value))
+            if key == "name":
+                num_tokens += tokens_per_name
+    num_tokens += 3  # every reply is primed with <|start|>assistant<|message|>
+    return num_tokens
 
 def calculate_f1_score(model_answer, label_list):
     
@@ -260,44 +307,100 @@ def parse_score_for_summarizing(batch_output_path):
 
     return samples
 
-def calculate_score(task, domain, user_msg, prediction, answer):
+def calculate_score(task, user_msg, prediction, answer):
 
     result_dict = dict()
     result_dict["prediction"] = prediction
     result_dict["answer"] = answer
-
-    if prediction == "FAILED": # gemini models refuse to answer at times
-        return result_dict, 0
     
     if task == "Recalling":
-        result_dict["precision"], result_dict["recall"], result_dict["f1_score"] = calculate_f1_score(prediction, answer)
+        if prediction == "FAILED":
+            result_dict["precision"], result_dict["recall"], result_dict["f1_score"] = 0, 0, 0
+        else:
+            result_dict["precision"], result_dict["recall"], result_dict["f1_score"] = calculate_f1_score(prediction, answer)
         score = result_dict["f1_score"]
     elif task == "Summarizing": 
         input_sections_or_segments = re.search("### Context:\n(.+?)\n\nNow, respond to the instruction", user_msg, re.DOTALL).group(1)
         result_dict["input_sections"] = input_sections_or_segments
         score = 0 # score will be calculated separately
     elif task == "Organizing":
-        pred_in_list = re.findall("\d+", prediction)
-        answer_in_list = re.findall("\d+", answer)
-        result_dict["lcs"], result_dict["lcs_score"] = calculate_lcs(pred_in_list, answer_in_list)
+        if prediction == "FAILED":
+            result_dict["lcs"], result_dict["lcs_score"] = 0
+        else:
+            pred_in_list = re.findall("\d+", prediction)
+            answer_in_list = re.findall("\d+", answer)
+            result_dict["lcs"], result_dict["lcs_score"] = calculate_lcs(pred_in_list, answer_in_list)
         score = result_dict["lcs_score"]
     elif task == "Attributing":
-        match = re.search(r"(Related Segments|Core IDs):\s*(.+)", prediction)
-        if match: # model has followed format instruction
-            target_span = match.group(2)
+        if prediction == "FAILED":
+            result_dict["precision"], result_dict["recall"], result_dict["f1_score"] = 0, 0, 0
         else:
-            target_span = prediction
-        
-        pred_numbers = ", ".join(set(re.findall("\d+", target_span)))
-        answer_numbers = [re.search("\d+", ans).group() if re.search("\d+", ans) else "None" for ans in answer]
+            match = re.search(r"(Related Segments|Core IDs):\s*(.+)", prediction)
+            if match: # model has followed format instruction
+                target_span = match.group(2)
+            else:
+                target_span = prediction
+            
+            pred_numbers = ", ".join(set(re.findall("\d+", target_span)))
+            answer_numbers = [re.search("\d+", ans).group() if re.search("\d+", ans) else "None" for ans in answer]
 
-        if pred_numbers == []:
-            pred_numbers = "None"
-        
-        result_dict["precision"], result_dict["recall"], result_dict["f1_score"] = calculate_f1_score(pred_numbers, answer_numbers)
+            if pred_numbers == []:
+                pred_numbers = "None"
+            
+            result_dict["precision"], result_dict["recall"], result_dict["f1_score"] = calculate_f1_score(pred_numbers, answer_numbers)
         score = result_dict["f1_score"]
     
     return result_dict, score
+
+def write_score_file(task, save_path):
+
+    if task == "Recalling":
+        score_per_domain = {
+            "Books":[],
+            "Debates":[],
+            "Medicine":[],
+            "Law":[]
+        }
+        metric = "f1_score"
+    elif task == "Summarizing":
+        score_per_domain = {
+            "Books":[],
+            "Debates":[],
+            "Medicine":[],
+            "Law":[]
+        }
+        metric = "score"
+    elif task == "Organizing":
+        score_per_domain = {
+            "Books":[],
+            "Debates":[],
+        }
+        metric = "lcs_score"
+    elif task == "Attributing":
+        score_per_domain = {
+            "Medicine":[],
+            "Law":[]
+        }
+        metric = "f1_score"
+    
+    scores = []
+    for domain in score_per_domain.keys():
+        pred_paths = glob.glob(os.path.join(save_path, domain, "*.json"))
+        for pred_path in pred_paths:
+            with open(pred_path) as rf:
+                pred_dict = json.load(rf)
+            score = pred_dict[metric]
+            scores.append(score)
+            score_per_domain[domain].append(score)
+
+    # write score file (overall / per domain)
+    avg_score = sum(scores) / len(scores)
+    avg_score_per_domain = {key: sum(value) / len(value) for key, value in score_per_domain.items()}    
+
+    with open(os.path.join(save_path, "final_score.txt"), "w") as wf:
+        wf.write(str(avg_score))
+    with open(os.path.join(save_path, "domain_score.json"), "w") as wf:
+        json.dump(avg_score_per_domain, wf)
 
 def get_model_prompts(model_name_or_path):
 
