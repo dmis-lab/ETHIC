@@ -56,7 +56,7 @@ def main(args):
 
         logger.info(f"Loading model with yarn.")
 
-        model = LLM(model=args.model_name_or_path, download_dir=args.cache_dir, rope_scaling={"factor":4.0, "original_max_position_embeddings": 32768, "type": "yarn"}, trust_remote_code=True)
+        model = LLM(model=args.model_name_or_path, download_dir=args.cache_dir, rope_scaling={"factor":4.0, "original_max_position_embeddings": 32768, "type": "yarn"}, trust_remote_code=True, tensor_parallel_size=gpu_count)
         sampling_params = SamplingParams(temperature=0, top_p=1.0, max_tokens=4096)
     else: # vllm
         model = LLM(model=args.model_name_or_path, download_dir=args.cache_dir, trust_remote_code=True, tensor_parallel_size=gpu_count)
