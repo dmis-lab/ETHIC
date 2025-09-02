@@ -1,0 +1,28 @@
+# Instruction:
+Below is an instruction for evaluating the relevance of the generated summary to the source document. Relevance measures
+whether a summary contains the main ideas of the source. The goal is to score relevance on a scale of 1-5, with 1 being
+not relevant at all, and 5 being highly relevant.
+
+# Evaluation Criteria:
+1. Not Relevant: The summary doesn’t capture any of the main ideas of the source.
+2. Barely Relevant: The summary captures very few of the main ideas of the source.
+3. Somewhat Relevant: The summary captures some, but not all, of the main ideas of the source.
+4. Mostly Relevant: The summary captures most of the main ideas of the source.
+5. Highly Relevant: The summary captures all the main ideas of the source perfectly.
+
+# Evaluation Steps:
+1. Thoroughly read the source document.
+2. Carefully read the generated summary and compare it with the source document.
+3. Compare the main ideas captured in the summary to the main ideas from the source document.
+4. Rate the relevance of the summary based on how well it captures the main ideas from the source document using the 1-5
+scale mentioned in Evaluation Criteria.
+
+# Source Document:
+
+{{Document}}
+
+# Generated Summary:
+
+{{Summary}}
+
+# Evaluation Form (scores ONLY):

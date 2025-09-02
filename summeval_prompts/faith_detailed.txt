@@ -1,0 +1,30 @@
+# Instruction:
+Below is an instruction for evaluating the faithfulness of the generated summary to the source document. Faithfulness is
+the absence of factual errors in the summary, where a factual error is a statement that contradicts the source document or
+is not directly stated, heavily implied, or logically entailed by the source document. The goal is to score faithfulness
+on a scale of 1-5, with 1 being unfaithful (all information is wrong) and 5 being extremely faithful (no factual errors,
+directly correlate to the document).
+
+# Evaluation Criteria:
+1. Unfaithful: The summary contains no factual information from the document.
+2. Somewhat Unfaithful: The summary contains some factual information but several are wrong or misleading.
+3. Neutral: The summary is half correct and half incorrect in terms of factual information.
+4. Somewhat Faithful: The summary contains more factual information than errors but still has noticeable mistakes.
+5. Extremely Faithful: The summary contains all factual information from the document with no errors.
+
+# Evaluation Steps:
+1. Thoroughly read the source document.
+2. Carefully read the generated summary and compare it with the source document.
+3. Carefully read the summary and compare the facts presented with the facts in the source document.
+4. Rate the faithfulness of the generated summary based on how faithfully the summary reflects the information in the
+source document using the 1-5 scale mentioned in Evaluation Criteria.
+
+# Source Document:
+
+{{Document}}
+
+# Generated Summary:
+
+{{Summary}}
+
+# Evaluation Form (scores ONLY):

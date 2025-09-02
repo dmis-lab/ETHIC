@@ -1,0 +1,35 @@
+# Instruction:
+Below is an instruction for evaluating the consistency of the generated summary to the source document. Consistency measures
+whether a candidate summary is factually consistent with the source. The goal is to score consistency on a scale of 1-5,
+with 1 being completely inconsistent and 5 being completely consistent.
+Please consider the following seven types of errors while performing the evaluation: i) predicate in summary inconsistent
+with source, ii) primary arguments or its attributes are wrong, iii) predicate’s circumstantial information is wrong, iv)
+co-reference error, v) multiple sentences linked incorrectly, vi) out of document error and vii) unreadable sentence(s) due
+to grammatical errors.
+
+# Evaluation Criteria:
+1. Completely Inconsistent - The summary contains multiple factual errors or inaccuracies in relation to the source
+document.
+2. Mostly Inconsistent - The summary contains several factual errors but retains some accurate information from the
+source.
+3. Somewhat Consistent - The summary contains a mix of accurate and inaccurate information. Factual errors are present
+but not overwhelming.
+4. Mostly Consistent - The summary is largely accurate, with few factual errors or inaccuracies.
+5. Completely Consistent - The summary accurately represents all the information presented in the source document without
+any factual error.
+
+# Evaluation Steps:
+1. Thoroughly read the source document.
+2. Carefully read the generated summary and compare it with the source document.
+3. Rate the consistency of the generated summary based on the provided types of errors using the 1-5 scale mentioned in
+Evaluation Criteria.
+
+# Source Document:
+
+{{Document}}
+
+# Generated Summary:
+
+{{Summary}}
+
+# Evaluation Form (scores ONLY):
