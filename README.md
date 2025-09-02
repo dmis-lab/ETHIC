@@ -31,7 +31,7 @@ task = "Recalling" # Choose from "Recalling", "Summarizing", "Organizing", "Attr
 dataset = load_dataset("dmis-lab/ETHIC", task)["test"]
 ```
 
-For model inference and evaluation, prepare your OpenAI API key (or other keys for authorization) in _api_config.py_, as we utilize `gpt-4o` in the _Summarizing_ task.
+For model inference and evaluation, prepare your OpenAI API key (or other keys for authorization) in _api_config.py_, as we utilize `gpt-4o` in the _Summarizing_ task. Also, Qwen2.5 recommends utilizing YaRN for inputs exceeding 32,768 tokens. Make sure to run inference twice: {_use_yarn_=True, _over_32k_only_=True} and {_use_yarn_=False, _under_32k_only_=True}.
 ```shell
 # run.sh
 
@@ -68,6 +68,7 @@ fi
 
 eval $cmd
 ```
+
 
 ## Citation
 ```
